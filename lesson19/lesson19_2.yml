@@ -1,0 +1,80 @@
+---
+- name: Homework 10 (Lesson 19) Part 2
+  hosts: vbox
+  become: true
+  vars:
+    code_server_version: 4.4.0
+    code_server_deb: "https://github.com/coder/code-server/releases/download/v{{ code_server_version }}/code-server_{{ code_server_version }}_amd64.deb"
+    code_server_user: code-server
+    code_server_user_home: /home/code-server
+    python_version: 3.9
+    project_repo: https://github.com/skorobkov/ithillel_lesson14
+    project_path: project
+  tasks:
+    - name: Ensure we run on Debian or Ubuntu
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution | lower in ['debian', 'ubuntu']
+
+    - name: Install code-sever
+      ansible.builtin.apt:
+        deb: "{{ code_server_deb }}"
+        update_cache: true
+        state: present
+
+    - name: Create user for code-server
+      ansible.builtin.user:
+        name: "{{ code_server_user }}"
+        home: "{{ code_server_user_home }}"
+        create_home: true
+
+    - name: Install packages
+      ansible.builtin.apt:
+        name:
+          - "python{{ python_version }}"
+          - git
+
+    - name: Project setup
+      become: true
+      become_user: "{{ code_server_user }}"
+      block:
+        - name: Clone project
+          ansible.builtin.git:
+            repo: "{{ project_repo }}"
+            dest: "{{  code_server_user_home  }}/{{ project_path }}"
+            version: master
+
+        - name: Instal requirements
+          ansible.builtin.pip:
+            chdir: "{{ code_server_user_home }}/{{ project_path }}"
+            requirements: requirements.txt
+            state: present
+
+        - name: Install extensions for code-server
+          changed_when: false
+          ansible.builtin.command:
+            cmd: "code-server --install-extension {{ item }}"
+          loop:
+            - ms-python.python
+            - redhat.ansible
+            - redhat.vscode-yaml
+            - samuelcolvin.jinjahtml
+            - esbenp.prettier-vscode
+
+    - name: Start code-server service for user
+      ansible.builtin.service:
+        name: "code-server@{{ code_server_user }}"
+        state: started
+        enabled: true
+
+    - name: Read code-server config file
+      changed_when: false
+      ansible.builtin.command:
+        cmd: "cat {{ code_server_user_home }}/.config/code-server/config.yaml"
+      register: raw_code_server_config
+
+    - name: Message for user
+      vars:
+        code_server_config: "{{ raw_code_server_config.stdout | from_yaml }}"
+      ansible.builtin.debug:
+        msg: "Open in browser http://{{ code_server_config['bind-addr'] }}/?folder={{ code_server_user_home }}/{{ project_path }} with password {{ code_server_config.password }}"

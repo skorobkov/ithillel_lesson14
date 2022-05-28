@@ -1,0 +1,110 @@
+---
+- name: Homework 10 (Lesson 19) Part 1
+  hosts: vbox
+  become: false
+  vars:
+    my_repo: https://github.com/skorobkov/react-redux-realworld-example-app.git
+    docker_image_name: lesson17
+    container_name: example_app
+    check_url: http://127.0.0.1:3000
+    project_path: project
+  tasks:
+    - name: Ensure we run on Debian
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution | lower == 'debian'
+
+    - name: Root user tasks
+      become: true
+      block:
+        - name: Install pre-requirements
+          ansible.builtin.apt:
+            update_cache: true
+            name:
+              - ca-certificates
+              - curl
+              - gnupg
+              - git
+              - pip
+            state: present
+
+        - name: Add repository key
+          ansible.builtin.apt_key:
+            url: https://download.docker.com/linux/debian/gpg
+
+        - name: Add repository
+          ansible.builtin.apt_repository:
+            mode: 0644
+            repo: "deb https://download.docker.com/linux/debian {{ ansible_lsb.codename }} stable"
+            state: present
+            filename: docker
+            update_cache: true
+            validate_certs: true
+
+        - name: Install docker
+          ansible.builtin.apt:
+            name:
+              - docker-ce
+              - docker-ce-cli
+
+        - name: Add user to docker group
+          ansible.builtin.user:
+            name: "{{ ansible_user }}"
+            groups:
+              - docker
+            append: true
+
+    - name: Add required python library
+      ansible.builtin.pip:
+        name:
+          - docker
+        state: present
+
+    - name: Clone repository
+      ansible.builtin.git:
+        repo: "{{ my_repo }}"
+        dest: "{{ project_path }}"
+        single_branch: true
+        version: master
+        depth: 1
+
+    - name: Build docker image
+      ansible.builtin.docker_image:
+        name: "{{ docker_image_name }}"
+        tag: "{{ docker_image_tag | default(omit) }}"
+        state: present
+        source: build
+        build:
+          path: "{{ project_path }}"
+          rm: true
+
+    - name: Start container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        pull: false
+        detach: true
+        networks:
+          - name: bridge
+        image: "{{ docker_image_name }}:{{ docker_image_tag | default('latest') }}"
+        ports:
+          - 3000:3000
+        state: started
+
+    - name: Make HTTP request until we gat any result
+      ansible.builtin.uri:
+        url: "{{ check_url }}"
+        status_code: []
+      register: result
+      failed_when: result.status == -1
+      until: result.status != -1
+      retries: 5
+      timeout: 1
+
+    - name: Print result
+      ansible.builtin.debug:
+        msg: "The URL {{ check_url }} returned {{ result.status }}"
+
+    - name: Delete container
+      community.docker.docker_container:
+        name: "{{ container_name }}"
+        state: absent
